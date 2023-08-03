@@ -2,18 +2,11 @@ package eu.kanade.tachiyomi.data.updater
 
 import android.content.Context
 import eu.kanade.tachiyomi.BuildConfig
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.NetworkHelper
-import eu.kanade.tachiyomi.network.awaitSuccess
-import eu.kanade.tachiyomi.network.parseAs
-import eu.kanade.tachiyomi.util.system.isInstalledFromFDroid
 import kotlinx.serialization.json.Json
 import tachiyomi.core.preference.Preference
 import tachiyomi.core.preference.PreferenceStore
-import tachiyomi.core.util.lang.withIOContext
 import uy.kohesive.injekt.injectLazy
-import java.util.Date
-import kotlin.time.Duration.Companion.days
 
 class AppUpdateChecker {
 
@@ -26,6 +19,10 @@ class AppUpdateChecker {
     }
 
     suspend fun checkForUpdate(context: Context, isUserPrompt: Boolean = false): AppUpdateResult {
+        // TODO: Add Update checking back in for Jishoyomi
+        return AppUpdateResult.NoNewUpdate
+
+        /*
         // Limit checks to once a every 3 days at most
         if (isUserPrompt.not() && Date().time < lastAppCheck.get() + 3.days.inWholeMilliseconds) {
             return AppUpdateResult.NoNewUpdate
@@ -61,6 +58,7 @@ class AppUpdateChecker {
 
             result
         }
+         */
     }
 
     private fun isNewVersion(versionTag: String): Boolean {
