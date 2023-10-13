@@ -16,6 +16,9 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.support.v4.media.session.MediaControllerCompat
+import android.support.v4.media.session.MediaSessionCompat
+import android.support.v4.media.session.PlaybackStateCompat
 import android.util.DisplayMetrics
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -145,6 +148,12 @@ class PlayerActivity : BaseActivity() {
     private var mReceiver: BroadcastReceiver? = null
 
     lateinit var binding: PlayerActivityBinding
+
+    private lateinit var mediaSession: MediaSessionCompat
+
+    private val playbackStateBuilder = PlaybackStateCompat.Builder()
+
+    private lateinit var headsetReceiver: BroadcastReceiver
 
     internal val player get() = binding.player
 
@@ -276,6 +285,7 @@ class PlayerActivity : BaseActivity() {
         super.onCreate(savedInstanceState)
 
         setupPlayerControls()
+        setupMediaSession()
         setupPlayerMPV()
         setupPlayerAudio()
         setupPlayerBrightness()
@@ -368,6 +378,11 @@ class PlayerActivity : BaseActivity() {
         }
 
         playerIsDestroyed = false
+
+        registerReceiver(
+            headsetReceiver,
+            IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY),
+        )
     }
 
     private fun setupPlayerControls() {
@@ -396,9 +411,16 @@ class PlayerActivity : BaseActivity() {
         val logLevel = if (viewModel.networkPreferences.verboseLogging().get()) "info" else "warn"
         player.initialize(applicationContext.filesDir.path, logLevel)
         MPVLib.observeProperty("chapter-list", MPVLib.mpvFormat.MPV_FORMAT_NONE)
-        mpvUpdateHwDec(HwDecState.get(playerPreferences.standardHwDec().get()))
+        MPVLib.setPropertyDouble("speed", playerPreferences.playerSpeed().get().toDouble())
         MPVLib.setOptionString("keep-open", "always")
         MPVLib.setOptionString("ytdl", "no")
+
+        mpvUpdateHwDec(HwDecState.get(playerPreferences.standardHwDec().get()))
+        when (playerPreferences.deband().get()) {
+            1 -> MPVLib.setOptionString("vf", "gradfun=radius=12")
+            2 -> MPVLib.setOptionString("deband", "yes")
+            3 -> MPVLib.setOptionString("vf", "format=yuv420p")
+        }
 
         MPVLib.addLogObserver(playerObserver)
         player.addObserver(playerObserver)
@@ -431,6 +453,116 @@ class PlayerActivity : BaseActivity() {
             playerPreferences.playerBrightnessValue().get()
         }
         verticalScrollLeft(0F)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun setupMediaSession() {
+        mediaSession = MediaSessionCompat(this, "Aniyomi_Player_Session").apply {
+            // Enable callbacks from MediaButtons and TransportControls
+            setFlags(
+                MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or
+                    MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS,
+            )
+
+            // Do not let MediaButtons restart the player when the app is not visible
+            setMediaButtonReceiver(null)
+
+            setPlaybackState(
+                with(playbackStateBuilder) {
+                    setState(
+                        PlaybackStateCompat.STATE_NONE,
+                        0L,
+                        0.0F,
+                    )
+                    build()
+                },
+            )
+
+            // Implement methods that handle callbacks from a media controller
+            setCallback(
+                object : MediaSessionCompat.Callback() {
+                    override fun onPlay() {
+                        pauseByIntents(false)
+                    }
+
+                    override fun onPause() {
+                        pauseByIntents(true)
+                    }
+
+                    override fun onSkipToPrevious() {
+                        if (playerPreferences.mediaChapterSeek().get()) {
+                            if (player.loadChapters().isNotEmpty()) {
+                                MPVLib.command(arrayOf("add", "chapter", "-1"))
+                                skipAnimation(getString(R.string.go_to_previous_chapter), isForward = false)
+                            }
+                        } else {
+                            changeEpisode(viewModel.getAdjacentEpisodeId(previous = true))
+                        }
+                    }
+
+                    override fun onSkipToNext() {
+                        if (playerPreferences.mediaChapterSeek().get()) {
+                            if (player.loadChapters().isNotEmpty()) {
+                                MPVLib.command(arrayOf("add", "chapter", "1"))
+                                skipAnimation(getString(R.string.go_to_next_chapter), isForward = true)
+                            } else {
+                                MPVLib.command(arrayOf("seek", viewModel.getAnimeSkipIntroLength().toString(), "relative+exact"))
+                                skipAnimation(getString(R.string.go_to_after_opening), isForward = true)
+                            }
+                        } else {
+                            changeEpisode(viewModel.getAdjacentEpisodeId(previous = false))
+                        }
+                    }
+                },
+            )
+        }
+
+        MediaControllerCompat(this, mediaSession).also { mediaController ->
+            MediaControllerCompat.setMediaController(this, mediaController)
+        }
+
+        headsetReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
+                    pauseByIntents(true)
+                }
+            }
+        }
+    }
+
+    private fun pauseByIntents(pause: Boolean) {
+        player.paused = pause
+        playerControls.toggleControls(!pause)
+        updatePlaybackState(pause = pause)
+    }
+
+    private fun updatePlaybackState(cachePause: Boolean = false, pause: Boolean = false) {
+        val state = when {
+            player.timePos?.let { it < 0 } ?: true ||
+                player.duration?.let { it <= 0 } ?: true -> PlaybackStateCompat.STATE_CONNECTING
+            cachePause -> PlaybackStateCompat.STATE_BUFFERING
+            pause or (player.paused == true) -> PlaybackStateCompat.STATE_PAUSED
+            else -> PlaybackStateCompat.STATE_PLAYING
+        }
+        var actions = PlaybackStateCompat.ACTION_PLAY or
+            PlaybackStateCompat.ACTION_PLAY_PAUSE or
+            PlaybackStateCompat.ACTION_PAUSE
+        if (viewModel.currentPlaylist.size > 1) {
+            actions = actions or PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
+                PlaybackStateCompat.ACTION_SKIP_TO_NEXT
+        }
+
+        mediaSession.setPlaybackState(
+            with(playbackStateBuilder) {
+                setState(
+                    state,
+                    player.timePos?.toLong() ?: 0L,
+                    player.playbackSpeed?.toFloat() ?: 1.0f,
+                )
+                setActions(actions)
+                build()
+            },
+        )
     }
 
     @Suppress("DEPRECATION")
@@ -497,6 +629,10 @@ class PlayerActivity : BaseActivity() {
     }
 
     override fun onDestroy() {
+        mediaSession.isActive = false
+        mediaSession.release()
+        unregisterReceiver(headsetReceiver)
+
         playerPreferences.playerVolumeValue().set(fineVolume)
         playerPreferences.playerBrightnessValue().set(brightness)
         MPVLib.removeLogObserver(playerObserver)
@@ -793,6 +929,33 @@ class PlayerActivity : BaseActivity() {
         ObjectAnimator.ofFloat(view, "alpha", 0.15f, 0.15f, 0f).setDuration(1000).start()
 
         MPVLib.command(arrayOf("seek", time.toString(), "relative+exact"))
+    }
+
+    // Taken from util/AniSkipApi.kt
+    private fun skipAnimation(skipText: String, isForward: Boolean) {
+        binding.secondsView.binding.doubleTapSeconds.text = skipText
+
+        binding.secondsView.updateLayoutParams<ConstraintLayout.LayoutParams> {
+            rightToRight = if (isForward) ConstraintLayout.LayoutParams.PARENT_ID else ConstraintLayout.LayoutParams.UNSET
+            leftToLeft = if (isForward) ConstraintLayout.LayoutParams.UNSET else ConstraintLayout.LayoutParams.PARENT_ID
+        }
+        binding.secondsView.visibility = View.VISIBLE
+        binding.secondsView.isForward = isForward
+
+        val bindingBg = if (isForward) binding.ffwdBg else binding.rewBg
+
+        bindingBg.visibility = View.VISIBLE
+        bindingBg.animate().alpha(0.15f).setDuration(100).withEndAction {
+            binding.secondsView.animate().alpha(1f).setDuration(500).withEndAction {
+                binding.secondsView.animate().alpha(0f).setDuration(500).withEndAction {
+                    bindingBg.animate().alpha(0f).setDuration(100).withEndAction {
+                        bindingBg.visibility = View.GONE
+                        binding.secondsView.visibility = View.GONE
+                        binding.secondsView.alpha = 1f
+                    }
+                }
+            }
+        }.start()
     }
 
     // Gesture Functions -- Start --
@@ -1560,19 +1723,28 @@ class PlayerActivity : BaseActivity() {
             "time-pos" -> {
                 playerControls.updatePlaybackPos(value.toInt())
                 viewModel.viewModelScope.launchUI { aniSkipStuff(value) }
+                updatePlaybackState()
             }
-            "duration" -> playerControls.updatePlaybackDuration(value.toInt())
+            "duration" -> {
+                playerControls.updatePlaybackDuration(value.toInt())
+                mediaSession.isActive = true
+                updatePlaybackState()
+            }
         }
     }
 
     internal fun eventPropertyUi(property: String, value: Boolean) {
         when (property) {
             "seeking" -> isSeeking(value)
-            "paused-for-cache" -> showLoadingIndicator(value)
+            "paused-for-cache" -> {
+                showLoadingIndicator(value)
+                updatePlaybackState(cachePause = true)
+            }
             "pause" -> {
                 if (!isFinishing) {
                     setAudioFocus(value)
                     updatePlaybackStatus(value)
+                    updatePlaybackState(pause = true)
                 }
             }
             "eof-reached" -> endFile(value)

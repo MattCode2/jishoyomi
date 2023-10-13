@@ -49,6 +49,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.util.fastAll
 import androidx.compose.ui.util.fastAny
 import androidx.compose.ui.util.fastMap
+import cafe.adriel.voyager.navigator.LocalNavigator
+import cafe.adriel.voyager.navigator.currentOrThrow
 import eu.kanade.domain.entries.anime.model.episodesFiltered
 import eu.kanade.presentation.entries.DownloadAction
 import eu.kanade.presentation.entries.EntryBottomActionMenu
@@ -62,12 +64,14 @@ import eu.kanade.presentation.entries.anime.components.EpisodeDownloadAction
 import eu.kanade.presentation.entries.anime.components.ExpandableAnimeDescription
 import eu.kanade.presentation.entries.anime.components.NextEpisodeAiringListItem
 import eu.kanade.tachiyomi.R
+import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
+import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.data.download.anime.model.AnimeDownload
 import eu.kanade.tachiyomi.source.anime.getNameForAnimeInfo
+import eu.kanade.tachiyomi.ui.browse.anime.extension.details.SourcePreferencesScreen
 import eu.kanade.tachiyomi.ui.entries.anime.AnimeScreenState
 import eu.kanade.tachiyomi.ui.entries.anime.EpisodeItem
 import eu.kanade.tachiyomi.ui.entries.anime.episodeDecimalFormat
-import eu.kanade.tachiyomi.ui.player.settings.PlayerPreferences
 import eu.kanade.tachiyomi.util.lang.toRelativeString
 import eu.kanade.tachiyomi.util.system.copyToClipboard
 import kotlinx.coroutines.delay
@@ -84,8 +88,6 @@ import tachiyomi.presentation.core.components.material.PullRefresh
 import tachiyomi.presentation.core.components.material.Scaffold
 import tachiyomi.presentation.core.util.isScrolledToEnd
 import tachiyomi.presentation.core.util.isScrollingUp
-import uy.kohesive.injekt.Injekt
-import uy.kohesive.injekt.api.get
 import java.text.DateFormat
 import java.util.Date
 import java.util.concurrent.TimeUnit
@@ -99,6 +101,8 @@ fun AnimeScreen(
     isTabletUi: Boolean,
     episodeSwipeEndAction: LibraryPreferences.EpisodeSwipeAction,
     episodeSwipeStartAction: LibraryPreferences.EpisodeSwipeAction,
+    showNextEpisodeAirTime: Boolean,
+    alwaysUseExternalPlayer: Boolean,
     onBackClicked: () -> Unit,
     onEpisodeClicked: (episode: Episode, alt: Boolean) -> Unit,
     onDownloadEpisode: ((List<EpisodeItem>, EpisodeDownloadAction) -> Unit)?,
@@ -146,6 +150,11 @@ fun AnimeScreen(
         }
     }
 
+    val navigator = LocalNavigator.currentOrThrow
+    val onSettingsClicked: (() -> Unit)? = {
+        navigator.push(SourcePreferencesScreen(state.source.id))
+    }.takeIf { state.source is ConfigurableAnimeSource }
+
     if (!isTabletUi) {
         AnimeScreenSmallImpl(
             state = state,
@@ -154,6 +163,8 @@ fun AnimeScreen(
             dateFormat = dateFormat,
             episodeSwipeEndAction = episodeSwipeEndAction,
             episodeSwipeStartAction = episodeSwipeStartAction,
+            showNextEpisodeAirTime = showNextEpisodeAirTime,
+            alwaysUseExternalPlayer = alwaysUseExternalPlayer,
             onBackClicked = onBackClicked,
             onEpisodeClicked = onEpisodeClicked,
             onDownloadEpisode = onDownloadEpisode,
@@ -181,6 +192,7 @@ fun AnimeScreen(
             onEpisodeSelected = onEpisodeSelected,
             onAllEpisodeSelected = onAllEpisodeSelected,
             onInvertSelection = onInvertSelection,
+            onSettingsClicked = onSettingsClicked,
         )
     } else {
         AnimeScreenLargeImpl(
@@ -189,6 +201,8 @@ fun AnimeScreen(
             dateRelativeTime = dateRelativeTime,
             episodeSwipeEndAction = episodeSwipeEndAction,
             episodeSwipeStartAction = episodeSwipeStartAction,
+            showNextEpisodeAirTime = showNextEpisodeAirTime,
+            alwaysUseExternalPlayer = alwaysUseExternalPlayer,
             dateFormat = dateFormat,
             onBackClicked = onBackClicked,
             onEpisodeClicked = onEpisodeClicked,
@@ -217,6 +231,7 @@ fun AnimeScreen(
             onEpisodeSelected = onEpisodeSelected,
             onAllEpisodeSelected = onAllEpisodeSelected,
             onInvertSelection = onInvertSelection,
+            onSettingsClicked = onSettingsClicked,
         )
     }
 }
@@ -230,6 +245,8 @@ private fun AnimeScreenSmallImpl(
     dateFormat: DateFormat,
     episodeSwipeEndAction: LibraryPreferences.EpisodeSwipeAction,
     episodeSwipeStartAction: LibraryPreferences.EpisodeSwipeAction,
+    showNextEpisodeAirTime: Boolean,
+    alwaysUseExternalPlayer: Boolean,
     onBackClicked: () -> Unit,
     onEpisodeClicked: (Episode, Boolean) -> Unit,
     onDownloadEpisode: ((List<EpisodeItem>, EpisodeDownloadAction) -> Unit)?,
@@ -256,6 +273,7 @@ private fun AnimeScreenSmallImpl(
     onEditCategoryClicked: (() -> Unit)?,
     onMigrateClicked: (() -> Unit)?,
     changeAnimeSkipIntro: (() -> Unit)?,
+    onSettingsClicked: (() -> Unit)?,
 
     // For bottom action menu
     onMultiBookmarkClicked: (List<Episode>, bookmarked: Boolean) -> Unit,
@@ -314,6 +332,7 @@ private fun AnimeScreenSmallImpl(
                 onSelectAll = { onAllEpisodeSelected(true) },
                 onInvertSelection = { onInvertSelection() },
                 isManga = false,
+                onClickSettings = onSettingsClicked,
             )
         },
         bottomBar = {
@@ -326,6 +345,7 @@ private fun AnimeScreenSmallImpl(
                 onDownloadEpisode = onDownloadEpisode,
                 onMultiDeleteClicked = onMultiDeleteClicked,
                 fillFraction = 1f,
+                alwaysUseExternalPlayer = alwaysUseExternalPlayer,
             )
         },
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
@@ -452,7 +472,7 @@ private fun AnimeScreenSmallImpl(
                                     timer -= 1000L
                                 }
                             }
-                            if (timer > 0L) {
+                            if (timer > 0L && showNextEpisodeAirTime && state.anime.status.toInt() != SAnime.COMPLETED) {
                                 NextEpisodeAiringListItem(
                                     title = stringResource(
                                         R.string.display_mode_episode,
@@ -491,6 +511,8 @@ fun AnimeScreenLargeImpl(
     dateFormat: DateFormat,
     episodeSwipeEndAction: LibraryPreferences.EpisodeSwipeAction,
     episodeSwipeStartAction: LibraryPreferences.EpisodeSwipeAction,
+    showNextEpisodeAirTime: Boolean,
+    alwaysUseExternalPlayer: Boolean,
     onBackClicked: () -> Unit,
     onEpisodeClicked: (Episode, Boolean) -> Unit,
     onDownloadEpisode: ((List<EpisodeItem>, EpisodeDownloadAction) -> Unit)?,
@@ -517,6 +539,7 @@ fun AnimeScreenLargeImpl(
     onEditCategoryClicked: (() -> Unit)?,
     onMigrateClicked: (() -> Unit)?,
     changeAnimeSkipIntro: (() -> Unit)?,
+    onSettingsClicked: (() -> Unit)?,
 
     // For bottom action menu
     onMultiBookmarkClicked: (List<Episode>, bookmarked: Boolean) -> Unit,
@@ -581,6 +604,7 @@ fun AnimeScreenLargeImpl(
                     onSelectAll = { onAllEpisodeSelected(true) },
                     onInvertSelection = { onInvertSelection() },
                     isManga = false,
+                    onClickSettings = onSettingsClicked,
                 )
             },
             bottomBar = {
@@ -597,6 +621,7 @@ fun AnimeScreenLargeImpl(
                         onDownloadEpisode = onDownloadEpisode,
                         onMultiDeleteClicked = onMultiDeleteClicked,
                         fillFraction = 0.5f,
+                        alwaysUseExternalPlayer = alwaysUseExternalPlayer,
                     )
                 }
             },
@@ -704,7 +729,7 @@ fun AnimeScreenLargeImpl(
                                             timer -= 1000L
                                         }
                                     }
-                                    if (timer > 0L) {
+                                    if (timer > 0L && showNextEpisodeAirTime && state.anime.status.toInt() != SAnime.COMPLETED) {
                                         NextEpisodeAiringListItem(
                                             title = stringResource(
                                                 R.string.display_mode_episode,
@@ -747,8 +772,8 @@ private fun SharedAnimeBottomActionMenu(
     onDownloadEpisode: ((List<EpisodeItem>, EpisodeDownloadAction) -> Unit)?,
     onMultiDeleteClicked: (List<Episode>) -> Unit,
     fillFraction: Float,
+    alwaysUseExternalPlayer: Boolean,
 ) {
-    val preferences: PlayerPreferences = Injekt.get()
     EntryBottomActionMenu(
         visible = selected.isNotEmpty(),
         modifier = modifier.fillMaxWidth(fillFraction),
@@ -779,10 +804,10 @@ private fun SharedAnimeBottomActionMenu(
         },
         onExternalClicked = {
             onEpisodeClicked(selected.fastMap { it.episode }.first(), true)
-        }.takeIf { !preferences.alwaysUseExternalPlayer().get() && selected.size == 1 },
+        }.takeIf { !alwaysUseExternalPlayer && selected.size == 1 },
         onInternalClicked = {
             onEpisodeClicked(selected.fastMap { it.episode }.first(), true)
-        }.takeIf { preferences.alwaysUseExternalPlayer().get() && selected.size == 1 },
+        }.takeIf { alwaysUseExternalPlayer && selected.size == 1 },
         isManga = false,
     )
 }

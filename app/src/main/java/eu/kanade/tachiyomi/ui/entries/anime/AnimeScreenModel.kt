@@ -86,7 +86,7 @@ class AnimeInfoScreenModel(
     val context: Context,
     val animeId: Long,
     private val isFromSource: Boolean,
-    internal val downloadPreferences: DownloadPreferences = Injekt.get(),
+    private val downloadPreferences: DownloadPreferences = Injekt.get(),
     private val libraryPreferences: LibraryPreferences = Injekt.get(),
     uiPreferences: UiPreferences = Injekt.get(),
     private val trackPreferences: TrackPreferences = Injekt.get(),
@@ -128,6 +128,10 @@ class AnimeInfoScreenModel(
 
     val episodeSwipeEndAction = libraryPreferences.swipeEpisodeEndAction().get()
     val episodeSwipeStartAction = libraryPreferences.swipeEpisodeStartAction().get()
+
+    val showNextEpisodeAirTime = trackPreferences.showNextEpisodeAiringTime().get()
+    val alwaysUseExternalPlayer = playerPreferences.alwaysUseExternalPlayer().get()
+    val useExternalDownloader = downloadPreferences.useExternalDownloader().get()
 
     val relativeTime by uiPreferences.relativeTime().asState(coroutineScope)
     val dateFormat by mutableStateOf(UiPreferences.dateFormat(uiPreferences.dateFormat().get()))
@@ -662,9 +666,9 @@ class AnimeInfoScreenModel(
             EpisodeDownloadAction.DELETE -> {
                 deleteEpisodes(items.map { it.episode })
             }
-            EpisodeDownloadAction.SHOW_OPTIONS -> {
+            EpisodeDownloadAction.SHOW_QUALITIES -> {
                 val episode = items.singleOrNull()?.episode ?: return
-                showOptionsDialog(episode)
+                showQualitiesDialog(episode)
             }
         }
     }
@@ -678,7 +682,7 @@ class AnimeInfoScreenModel(
 
             DownloadAction.UNVIEWED_ITEMS -> getUnseenEpisodes()
         }
-        if (!episodesToDownload.isNullOrEmpty()) {
+        if (episodesToDownload.isNotEmpty()) {
             startDownload(episodesToDownload, false)
         }
     }
@@ -954,7 +958,7 @@ class AnimeInfoScreenModel(
                 .map { tracks ->
                     loggedServices
                         // Map to TrackItem
-                        .map { service -> AnimeTrackItem(tracks.find { it.syncId.toLong() == service.id }, service) }
+                        .map { service -> AnimeTrackItem(tracks.find { it.syncId == service.id }, service) }
                         // Show only if the service supports this anime's source
                         .filter { (it.service as? EnhancedAnimeTrackService)?.accept(source!!) ?: true }
                 }
@@ -978,7 +982,7 @@ class AnimeInfoScreenModel(
         data class ChangeCategory(val anime: Anime, val initialSelection: List<CheckboxState<Category>>) : Dialog()
         data class DeleteEpisodes(val episodes: List<Episode>) : Dialog()
         data class DuplicateAnime(val anime: Anime, val duplicate: Anime) : Dialog()
-        data class Options(val episode: Episode, val anime: Anime, val source: AnimeSource) : Dialog()
+        data class ShowQualities(val episode: Episode, val anime: Anime, val source: AnimeSource) : Dialog()
         object ChangeAnimeSkipIntro : Dialog()
         object SettingsSheet : Dialog()
         object TrackSheet : Dialog()
@@ -1039,11 +1043,11 @@ class AnimeInfoScreenModel(
         }
     }
 
-    private fun showOptionsDialog(episode: Episode) {
+    private fun showQualitiesDialog(episode: Episode) {
         mutableState.update { state ->
             when (state) {
                 AnimeScreenState.Loading -> state
-                is AnimeScreenState.Success -> { state.copy(dialog = Dialog.Options(episode, state.anime, state.source)) }
+                is AnimeScreenState.Success -> { state.copy(dialog = Dialog.ShowQualities(episode, state.anime, state.source)) }
             }
         }
     }

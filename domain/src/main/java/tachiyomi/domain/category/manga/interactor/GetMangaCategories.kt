@@ -7,7 +7,6 @@ import tachiyomi.domain.category.model.Category
 class GetMangaCategories(
     private val categoryRepository: MangaCategoryRepository,
 ) {
-
     fun subscribe(): Flow<List<Category>> {
         return categoryRepository.getAllMangaCategoriesAsFlow()
     }
